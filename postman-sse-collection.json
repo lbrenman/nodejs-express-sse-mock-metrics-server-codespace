@@ -1,0 +1,25 @@
+{
+  "info": {
+    "_postman_id": "f7bb5e9b-6c6a-4b84-bf19-01d54a3b0abc",
+    "name": "Codespaces SSE Metrics Stream",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "sse-metrics-demo"
+  },
+  "item": [
+    {
+      "name": "SSE Metrics Stream",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{codespace_sse_url}}"
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "codespace_sse_url",
+      "value": "https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/stream"
+    }
+  ]
+}

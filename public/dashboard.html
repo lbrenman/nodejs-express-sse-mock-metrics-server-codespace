@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>SSE Metrics Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0b1120;
+      color: #e5e7eb;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    header {
+      padding: 16px 24px;
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: radial-gradient(circle at top, #1f2937 0, #020617 60%);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.3rem;
+      font-weight: 600;
+    }
+    header .status {
+      font-size: 0.9rem;
+      padding: 4px 10px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #6b7280;
+    }
+    .status.connected {
+      background: rgba(16, 185, 129, 0.15);
+      color: #6ee7b7;
+    }
+    .status.connected .status-dot {
+      background: #22c55e;
+    }
+    .status.disconnected {
+      background: rgba(239, 68, 68, 0.1);
+      color: #fca5a5;
+    }
+    .status.disconnected .status-dot {
+      background: #ef4444;
+    }
+    main {
+      flex: 1;
+      padding: 16px 24px 24px 24px;
+      display: grid;
+      grid-template-columns: minmax(0, 2fr) minmax(0, 1.5fr);
+      gap: 16px;
+    }
+    @media (max-width: 900px) {
+      main {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+    .card {
+      background: rgba(15, 23, 42, 0.9);
+      border-radius: 12px;
+      border: 1px solid #1f2937;
+      padding: 12px 14px;
+      box-shadow: 0 12px 25px rgba(0, 0, 0, 0.35);
+    }
+    .card h2 {
+      margin: 0 0 8px 0;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #9ca3af;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .metric-pill {
+      background: rgba(15, 23, 42, 0.9);
+      border-radius: 10px;
+      border: 1px solid #111827;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .metric-label {
+      font-size: 0.75rem;
+      color: #9ca3af;
+    }
+    .metric-value {
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    .metric-caption {
+      font-size: 0.7rem;
+      color: #6b7280;
+    }
+    .metric-bar-track {
+      position: relative;
+      height: 4px;
+      border-radius: 999px;
+      background: #111827;
+      margin-top: 4px;
+      overflow: hidden;
+    }
+    .metric-bar-fill {
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 0%;
+      background: linear-gradient(to right, #22c55e, #eab308, #ef4444);
+      transition: width 0.3s ease-out;
+    }
+    .tag-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+      font-size: 0.75rem;
+    }
+    .tag {
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #020617;
+      border: 1px solid #1f2937;
+      color: #9ca3af;
+    }
+    .timestamp {
+      font-size: 0.7rem;
+      color: #6b7280;
+      margin-top: 4px;
+    }
+    .notifications-list {
+      max-height: 280px;
+      overflow-y: auto;
+      padding-right: 4px;
+      font-size: 0.8rem;
+    }
+    .notification {
+      border-radius: 8px;
+      padding: 8px 9px;
+      margin-bottom: 6px;
+      border: 1px solid #111827;
+      background: rgba(15, 23, 42, 0.85);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .notification-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .notification-type {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #9ca3af;
+    }
+    .notification-severity {
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+    .severity-info {
+      background: rgba(59, 130, 246, 0.12);
+      color: #bfdbfe;
+    }
+    .severity-warning {
+      background: rgba(234, 179, 8, 0.12);
+      color: #facc15;
+    }
+    .severity-critical {
+      background: rgba(248, 113, 113, 0.13);
+      color: #fecaca;
+    }
+    .notification-message {
+      font-size: 0.8rem;
+      color: #e5e7eb;
+    }
+    .notification-time {
+      font-size: 0.7rem;
+      color: #6b7280;
+    }
+    .log {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 0.75rem;
+      background: #020617;
+      border-radius: 8px;
+      border: 1px solid #111827;
+      padding: 8px;
+      height: 150px;
+      overflow-y: auto;
+      margin-top: 4px;
+      color: #9ca3af;
+    }
+    .log-line {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .muted {
+      opacity: 0.6;
+    }
+    .pill {
+      font-size: 0.7rem;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid #1f2937;
+      color: #9ca3af;
+      background: #020617;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>SSE Metrics Dashboard</h1>
+      <div style="font-size: 0.8rem; color:#9ca3af;">
+        Live stream from <code>/sse/stream</code>
+      </div>
+    </div>
+    <div>
+      <div id="status-pill" class="status disconnected">
+        <span class="status-dot"></span>
+        <span id="status-text">Disconnected</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Current Metrics</h2>
+      <div class="tag-row">
+        <span class="pill" id="service-pill">service: —</span>
+        <span class="pill" id="region-pill">region: —</span>
+      </div>
+      <div class="metrics-grid" style="margin-top: 10px;">
+        <div class="metric-pill">
+          <div class="metric-label">CPU Utilization</div>
+          <div class="metric-value" id="cpu-value">—%</div>
+          <div class="metric-bar-track">
+            <div class="metric-bar-fill" id="cpu-bar"></div>
+          </div>
+          <div class="metric-caption">Target &lt; 70%</div>
+        </div>
+        <div class="metric-pill">
+          <div class="metric-label">Memory Usage</div>
+          <div class="metric-value" id="memory-value">—%</div>
+          <div class="metric-bar-track">
+            <div class="metric-bar-fill" id="memory-bar"></div>
+          </div>
+          <div class="metric-caption">Target &lt; 80%</div>
+        </div>
+        <div class="metric-pill">
+          <div class="metric-label">Request Rate</div>
+          <div class="metric-value" id="req-value">— r/s</div>
+          <div class="metric-caption">All regions</div>
+        </div>
+        <div class="metric-pill">
+          <div class="metric-label">Error Rate</div>
+          <div class="metric-value" id="err-value">— r/s</div>
+          <div class="metric-caption">Ideal &lt; 1.0 r/s</div>
+        </div>
+      </div>
+      <div class="timestamp" id="metric-timestamp">Awaiting first metric…</div>
+      <div class="log" id="metrics-log"></div>
+    </section>
+
+    <section class="card">
+      <h2>Notifications</h2>
+      <div class="notifications-list" id="notifications"></div>
+      <div class="timestamp muted" id="heartbeat-label">Heartbeat: —</div>
+    </section>
+  </main>
+
+  <script>
+    const statusPill = document.getElementById('status-pill');
+    const statusText = document.getElementById('status-text');
+    const servicePill = document.getElementById('service-pill');
+    const regionPill = document.getElementById('region-pill');
+    const cpuValue = document.getElementById('cpu-value');
+    const memoryValue = document.getElementById('memory-value');
+    const reqValue = document.getElementById('req-value');
+    const errValue = document.getElementById('err-value');
+    const cpuBar = document.getElementById('cpu-bar');
+    const memoryBar = document.getElementById('memory-bar');
+    const metricTimestamp = document.getElementById('metric-timestamp');
+    const metricsLog = document.getElementById('metrics-log');
+    const notificationsEl = document.getElementById('notifications');
+    const heartbeatLabel = document.getElementById('heartbeat-label');
+
+    function setStatus(connected) {
+      statusPill.classList.toggle('connected', connected);
+      statusPill.classList.toggle('disconnected', !connected);
+      statusText.textContent = connected ? 'Connected' : 'Disconnected';
+    }
+
+    function appendLog(prefix, payload) {
+      const line = document.createElement('div');
+      line.className = 'log-line';
+      const ts = new Date().toLocaleTimeString();
+      line.textContent = `[${ts}] ${prefix} ${payload}`;
+      metricsLog.appendChild(line);
+      while (metricsLog.childElementCount > 40) {
+        metricsLog.firstChild.remove();
+      }
+      metricsLog.scrollTop = metricsLog.scrollHeight;
+    }
+
+    function addNotification(evt) {
+      const data = JSON.parse(evt.data);
+      const container = document.createElement('div');
+      container.className = 'notification';
+
+      const header = document.createElement('div');
+      header.className = 'notification-header';
+
+      const typeSpan = document.createElement('span');
+      typeSpan.className = 'notification-type';
+      typeSpan.textContent = data.type || 'notification';
+
+      const severitySpan = document.createElement('span');
+      const severity = (data.severity || 'info').toLowerCase();
+      severitySpan.className = 'notification-severity severity-' + severity;
+      severitySpan.textContent = severity;
+
+      header.appendChild(typeSpan);
+      header.appendChild(severitySpan);
+
+      const messageP = document.createElement('div');
+      messageP.className = 'notification-message';
+      messageP.textContent = data.message || '(no message)';
+
+      const timeP = document.createElement('div');
+      timeP.className = 'notification-time';
+      const ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+      timeP.textContent = ts;
+
+      container.appendChild(header);
+      container.appendChild(messageP);
+      container.appendChild(timeP);
+
+      notificationsEl.insertBefore(container, notificationsEl.firstChild);
+      while (notificationsEl.childElementCount > 20) {
+        notificationsEl.lastChild.remove();
+      }
+    }
+
+    function updateMetrics(evt) {
+      const data = JSON.parse(evt.data);
+      servicePill.textContent = 'service: ' + (data.service || '—');
+      regionPill.textContent = 'region: ' + (data.region || '—');
+
+      if (data.metrics) {
+        const m = data.metrics;
+        const cpu = m.cpuPercent ?? null;
+        const mem = m.memoryPercent ?? null;
+        const req = m.requestRatePerSec ?? null;
+        const err = m.errorRatePerSec ?? null;
+
+        cpuValue.textContent = cpu != null ? cpu.toFixed(1) + '%' : '—%';
+        memoryValue.textContent = mem != null ? mem.toFixed(1) + '%' : '—%';
+        reqValue.textContent = req != null ? req + ' r/s' : '— r/s';
+        errValue.textContent = err != null ? err.toFixed(2) + ' r/s' : '— r/s';
+
+        cpuBar.style.width = cpu != null ? Math.max(0, Math.min(cpu, 100)) + '%' : '0%';
+        memoryBar.style.width = mem != null ? Math.max(0, Math.min(mem, 100)) + '%' : '0%';
+      }
+
+      const ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+      metricTimestamp.textContent = 'Last metric: ' + ts;
+
+      appendLog('metric', evt.data);
+    }
+
+    function updateHeartbeat(evt) {
+      try {
+        const data = JSON.parse(evt.data);
+        const ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+        heartbeatLabel.textContent = 'Heartbeat: ' + ts;
+      } catch (e) {
+        heartbeatLabel.textContent = 'Heartbeat: received';
+      }
+    }
+
+    function connect() {
+      const es = new EventSource('/sse/stream');
+
+      es.addEventListener('open', () => {
+        setStatus(true);
+        appendLog('system', 'connection opened');
+      });
+
+      es.addEventListener('error', (err) => {
+        setStatus(false);
+        appendLog('system', 'connection error / retrying...');
+      });
+
+      es.addEventListener('system-info', (evt) => {
+        appendLog('system-info', evt.data);
+      });
+
+      es.addEventListener('metric', updateMetrics);
+      es.addEventListener('notification', addNotification);
+      es.addEventListener('heartbeat', updateHeartbeat);
+
+      return es;
+    }
+
+    let eventSource = connect();
+  </script>
+</body>
+</html>
