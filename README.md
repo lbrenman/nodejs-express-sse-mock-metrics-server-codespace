@@ -35,6 +35,8 @@ It:
 
    By default it listens on port **3000**.
 
+  ![Imgur](https://imgur.com/76GR3DA.png)
+
 3. **Get the Codespaces URL**
 
    Codespaces will expose port 3000 as something like:
@@ -42,6 +44,7 @@ It:
    ```text
    https://YOUR-CODESPACE-NAME-3000.app.github.dev
    ```
+  ![Imgur](https://imgur.com/xo4N9iY.png)
 
 ---
 
@@ -183,6 +186,8 @@ https://YOUR-CODESPACE-NAME-3000.app.github.dev/dashboard.html
 
 Open it in your browser and watch the events roll in.
 
+![Imgur](https://imgur.com/EGqhMv3.png)
+
 ---
 
 ## Using Postman
@@ -199,6 +204,8 @@ This repo includes `postman-sse-collection.json`.
 
 4. Run the **SSE Metrics Stream** request.
 5. Leave the tab open to watch raw SSE events.
+
+![Imgur](https://imgur.com/EQWLt27.png)
 
 ---
 
