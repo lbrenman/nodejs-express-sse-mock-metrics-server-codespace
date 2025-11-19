@@ -1,0 +1,38 @@
+{
+    "timestamp": "2025-11-19T13:22:40.000Z",
+    "service": "api-gateway",
+    "region": "us-east-1",
+    "metrics": {
+        "cpuPercent": 92.66,
+        "memoryPercent": 91.6,
+        "requestRatePerSec": 318,
+        "errorRatePerSec": 1.94,
+        "latencyMsP95": 364
+    }
+}
+
+{
+    "timestamp": "2025-11-19T13:22:56.003Z",
+    "service": "payments",
+    "region": "us-east-1",
+    "metrics": {
+        "cpuPercent": 54.87,
+        "memoryPercent": 67.45,
+        "requestRatePerSec": 99,
+        "errorRatePerSec": 9.74,
+        "latencyMsP95": 570
+    }
+}
+
+{
+    "timestamp": "2025-11-19T13:22:56.003Z",
+    "service": "payments",
+    "region": "us-east-1",
+    "metrics": {
+        "cpuPercent": 54.87,
+        "memoryPercent": 67.45,
+        "requestRatePerSec": 99,
+        "errorRatePerSec": 9.74,
+        "latencyMsP95": 570
+    }
+}
