@@ -60,6 +60,10 @@ It:
   - Accepts a `Last-Event-ID` header (or `?lastEventId=N` query param) to replay missed events.
 - **Stream status**: `GET /sse/status`
   - Current event ID, replay buffer range, and connected client count.
+- **Last event**: `GET /sse/last`
+  - Returns the most recent buffered event as plain JSON: `{ "id": 1873, "event": "metric", "data": { ... } }`.
+  - Optional filters: `?event=notification` (event kind) and `?type=incident,slowdown` (matched against `data.type`).
+  - Returns `404` with `{ "error": "not-found", ... }` if nothing in the buffer matches.
 - **Kick clients**: `POST /sse/kick`
   - Server closes every SSE connection. Browser `EventSource` clients reconnect on their own and send `Last-Event-ID` automatically.
 - **Dashboard**: `GET /dashboard.html`
@@ -171,6 +175,10 @@ curl -N -H "Last-Event-ID: 42" https://YOUR-CODESPACE-NAME-3000.app.github.dev/s
 
 # 3. Inspect what's in the buffer
 curl https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/status
+
+# 4. Fetch the most recent event (or the most recent incident notification)
+curl https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/last
+curl "https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/last?event=notification&type=incident"
 ```
 
 ### Try it with Postman

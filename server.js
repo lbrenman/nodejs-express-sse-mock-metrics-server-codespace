@@ -200,6 +200,33 @@ app.get('/sse/status', (req, res) => {
   });
 });
 
+// Most recent event from the replay buffer, as plain JSON (no streaming).
+//   GET /sse/last                                  -> latest metric or notification
+//   GET /sse/last?event=notification               -> latest notification
+//   GET /sse/last?event=notification&type=incident -> latest incident notification
+// `type` is a comma-separated list matched against data.type.
+// Returns 404 if nothing in the buffer matches.
+app.get('/sse/last', (req, res) => {
+  const eventFilter = req.query.event ? String(req.query.event) : null;
+  const typeFilter = req.query.type
+    ? String(req.query.type).split(',').map((s) => s.trim()).filter(Boolean)
+    : null;
+
+  for (let i = eventBuffer.length - 1; i >= 0; i--) {
+    const e = eventBuffer[i];
+    if (eventFilter && e.event !== eventFilter) continue;
+    if (typeFilter && !typeFilter.includes(e.data && e.data.type)) continue;
+    return res.json({ id: e.id, event: e.event, data: e.data });
+  }
+
+  res.status(404).json({
+    error: 'not-found',
+    message: 'No buffered event matches the filter',
+    filter: { event: eventFilter, type: typeFilter },
+    currentEventId: lastIssuedId
+  });
+});
+
 // Server-side drop of every connection. Browser EventSource clients will auto-reconnect
 // after `retry` ms and automatically send the Last-Event-ID header — the native way
 // to see resume working without writing any client code.
