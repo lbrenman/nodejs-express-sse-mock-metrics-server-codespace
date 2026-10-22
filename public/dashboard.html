@@ -218,6 +218,27 @@
     .muted {
       opacity: 0.6;
     }
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .btn {
+      font: inherit;
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid #374151;
+      background: #111827;
+      color: #e5e7eb;
+      cursor: pointer;
+    }
+    .btn:hover { background: #1f2937; }
+    .btn:disabled { opacity: 0.4; cursor: default; }
+    .log-line.replayed { color: #93c5fd; }
+    .log-line.gap { color: #fca5a5; }
     .pill {
       font-size: 0.7rem;
       padding: 2px 7px;
@@ -236,7 +257,12 @@
         Live stream from <code>/sse/stream</code>
       </div>
     </div>
-    <div>
+    <div class="controls">
+      <span class="pill" id="last-id-pill">last event id: —</span>
+      <button class="btn" id="btn-drop" title="Close the connection client-side; events keep flowing on the server">Drop</button>
+      <button class="btn" id="btn-resume" title="Reconnect and replay everything after the last event id">Resume</button>
+      <button class="btn" id="btn-fresh" title="Reconnect without a last event id (live only)">Fresh</button>
+      <button class="btn" id="btn-kick" title="Server closes the connection; EventSource auto-reconnects and sends Last-Event-ID itself">Server kick</button>
       <div id="status-pill" class="status disconnected">
         <span class="status-dot"></span>
         <span id="status-text">Disconnected</span>
@@ -312,9 +338,31 @@
       statusText.textContent = connected ? 'Connected' : 'Disconnected';
     }
 
-    function appendLog(prefix, payload) {
+    const lastIdPill = document.getElementById('last-id-pill');
+
+    // Last event ID this page has actually processed. The browser's EventSource
+    // tracks this internally too (and sends it as Last-Event-ID on auto-reconnect),
+    // but it doesn't expose it, so we track it ourselves for manual "Resume".
+    let lastSeenId = null;
+    // Number of upcoming id'd events that are replays (announced in system-info)
+    let pendingReplays = 0;
+
+    // Call for every event that carries an SSE id. Returns a log prefix like "#42".
+    function trackId(evt) {
+      if (!evt.lastEventId) return { label: '', cls: '' };
+      lastSeenId = evt.lastEventId;
+      lastIdPill.textContent = 'last event id: ' + lastSeenId;
+      let cls = '';
+      if (pendingReplays > 0) {
+        pendingReplays--;
+        cls = 'replayed';
+      }
+      return { label: '#' + evt.lastEventId + (cls ? ' (replay)' : ''), cls };
+    }
+
+    function appendLog(prefix, payload, cls = '') {
       const line = document.createElement('div');
-      line.className = 'log-line';
+      line.className = 'log-line' + (cls ? ' ' + cls : '');
       const ts = new Date().toLocaleTimeString();
       line.textContent = `[${ts}] ${prefix} ${payload}`;
       metricsLog.appendChild(line);
@@ -325,6 +373,8 @@
     }
 
     function addNotification(evt) {
+      const { label, cls } = trackId(evt);
+      appendLog(`${label} notification`, evt.data, cls);
       const data = JSON.parse(evt.data);
       const container = document.createElement('div');
       container.className = 'notification';
@@ -364,6 +414,7 @@
     }
 
     function updateMetrics(evt) {
+      const { label, cls } = trackId(evt);
       const data = JSON.parse(evt.data);
       servicePill.textContent = 'service: ' + (data.service || '—');
       regionPill.textContent = 'region: ' + (data.region || '—');
@@ -387,7 +438,7 @@
       const ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
       metricTimestamp.textContent = 'Last metric: ' + ts;
 
-      appendLog('metric', evt.data);
+      appendLog(`${label} metric`, evt.data, cls);
     }
 
     function updateHeartbeat(evt) {
@@ -400,21 +451,41 @@
       }
     }
 
-    function connect() {
-      const es = new EventSource('/sse/stream');
+    // resumeFrom: an event id to resume after, or null for a fresh (live-only) connection.
+    // A manually created EventSource can't set headers, so the id goes in the query
+    // string. When the browser auto-reconnects on its own (e.g. after "Server kick"),
+    // it sends the real Last-Event-ID header instead — the server accepts both.
+    function connect(resumeFrom = null) {
+      const url = resumeFrom != null
+        ? '/sse/stream?lastEventId=' + encodeURIComponent(resumeFrom)
+        : '/sse/stream';
+      const es = new EventSource(url);
 
       es.addEventListener('open', () => {
         setStatus(true);
-        appendLog('system', 'connection opened');
+        appendLog('system', 'connection opened' + (resumeFrom != null ? ` (resuming after #${resumeFrom})` : ''));
       });
 
-      es.addEventListener('error', (err) => {
+      es.addEventListener('error', () => {
         setStatus(false);
-        appendLog('system', 'connection error / retrying...');
+        appendLog('system', es.readyState === EventSource.CLOSED
+          ? 'connection closed'
+          : `connection lost, auto-retrying (will send Last-Event-ID: ${lastSeenId ?? 'none'})...`);
       });
 
       es.addEventListener('system-info', (evt) => {
+        try {
+          const info = JSON.parse(evt.data);
+          pendingReplays = info.resume?.replayedCount || 0;
+          if (info.resume?.requestedLastEventId != null) {
+            appendLog('system-info', `resume requested after #${info.resume.requestedLastEventId}, replaying ${pendingReplays} event(s)`, 'replayed');
+          }
+        } catch (e) { /* ignore */ }
         appendLog('system-info', evt.data);
+      });
+
+      es.addEventListener('replay-gap', (evt) => {
+        appendLog('replay-gap', evt.data, 'gap');
       });
 
       es.addEventListener('metric', updateMetrics);
@@ -425,6 +496,33 @@
     }
 
     let eventSource = connect();
+
+    document.getElementById('btn-drop').addEventListener('click', () => {
+      if (eventSource) eventSource.close();
+      eventSource = null;
+      setStatus(false);
+      appendLog('system', `dropped by client at #${lastSeenId ?? '—'} (server keeps generating events)`);
+    });
+
+    document.getElementById('btn-resume').addEventListener('click', () => {
+      if (eventSource) eventSource.close();
+      eventSource = connect(lastSeenId);
+    });
+
+    document.getElementById('btn-fresh').addEventListener('click', () => {
+      if (eventSource) eventSource.close();
+      eventSource = connect(null);
+    });
+
+    document.getElementById('btn-kick').addEventListener('click', async () => {
+      try {
+        const r = await fetch('/sse/kick', { method: 'POST' });
+        const j = await r.json();
+        appendLog('system', `server kicked ${j.kicked} connection(s); EventSource will reconnect on its own`);
+      } catch (e) {
+        appendLog('system', 'kick failed: ' + e.message, 'gap');
+      }
+    });
   </script>
 </body>
 </html>

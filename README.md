@@ -7,6 +7,7 @@ It:
 - Streams fake **system metrics** every _N_ milliseconds
 - Occasionally sends random **notification** events
 - Uses SSE **event types**, **IDs**, and **JSON** payloads
+- Supports **`Last-Event-ID` resume**: one shared stream with global IDs and a replay buffer
 - Has configurable timing & randomness via **environment variables**
 - Serves a **browser dashboard** at `/dashboard.html`
 - Includes a **Postman collection** pointing at the SSE endpoint
@@ -56,6 +57,11 @@ It:
   - Returns `{ "status": "ok", "time": "..." }`.
 - **SSE stream**: `GET /sse/stream`
   - Main event stream (metrics, notifications, heartbeat, system-info).
+  - Accepts a `Last-Event-ID` header (or `?lastEventId=N` query param) to replay missed events.
+- **Stream status**: `GET /sse/status`
+  - Current event ID, replay buffer range, and connected client count.
+- **Kick clients**: `POST /sse/kick`
+  - Server closes every SSE connection. Browser `EventSource` clients reconnect on their own and send `Last-Event-ID` automatically.
 - **Dashboard**: `GET /dashboard.html`
   - Tiny HTML dashboard that consumes `/sse/stream` with `EventSource`.
 
@@ -123,7 +129,10 @@ The SSE endpoint uses **named events** and **IDs**:
     }
     ```
 
-Each event is delivered in standard SSE format:
+- `replay-gap`
+  - Sent on connect when a resume can't be fully satisfied: the requested ID is older than the replay buffer (`buffer-exceeded`, with `lostCount`) or newer than anything the server has issued, usually because the server restarted (`unknown-id`).
+
+Each data event (`metric`, `notification`) is delivered in standard SSE format:
 
 ```text
 id: 42
@@ -131,6 +140,49 @@ event: metric
 data: {"timestamp":"...","service":"api-gateway", ...}
 
 ```
+
+Control events (`system-info`, `heartbeat`, `replay-gap`) are sent **without** an `id:` line, so they never move the client's last-event-ID cursor and are never replayed.
+
+---
+
+## Event IDs & Resuming with `Last-Event-ID`
+
+All clients share **one stream**: a single generator publishes events to every connected client, and event IDs come from **one global counter** that keeps climbing whether anyone is connected or not. A new connection therefore sees IDs like `1873`, `1874`, … not `1`.
+
+The server keeps the most recent `REPLAY_BUFFER_SIZE` events in memory. When a client connects with a last-seen ID, the server:
+
+1. Sends `system-info` with `resume.requestedLastEventId` and `resume.replayedCount`
+2. Sends a `replay-gap` event if some events can't be recovered
+3. Replays every buffered event with an ID greater than the requested one, with its **original** ID
+4. Continues with live events
+
+The ID is read from the `Last-Event-ID` request header first, then from the `lastEventId` query parameter.
+
+> The buffer is in memory, so a server restart resets the counter to 1 and empties the buffer. A client that resumes with an ID from before the restart gets a `replay-gap` with reason `unknown-id`.
+
+### Try it with curl
+
+```bash
+# 1. Connect, note an id, then Ctrl+C
+curl -N https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/stream
+
+# 2. Wait a few seconds, then resume — events after that id replay immediately
+curl -N -H "Last-Event-ID: 42" https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/stream
+
+# 3. Inspect what's in the buffer
+curl https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/status
+```
+
+### Try it with Postman
+
+1. Run **SSE Metrics Stream**, note the last `id`, then cancel the request.
+2. Wait a few seconds.
+3. On the **Headers** tab add `Last-Event-ID` with that value and send again.
+4. The first events you get are the ones you missed, followed by live ones.
+
+### How browsers do it
+
+`EventSource` remembers the last `id:` it received. If the connection drops (network blip, or the server ends the response), it waits `retry` ms (the server sends `retry: CLIENT_RETRY_MS`) and reconnects **with the `Last-Event-ID` header set automatically**. A brand-new `EventSource` (page reload, or creating a new one in code) starts with no ID, and `EventSource` cannot set custom headers, so manual resumes pass `?lastEventId=` instead.
 
 ---
 
@@ -153,12 +205,21 @@ All knobs are environment variables (with sane defaults):
   Interval between `heartbeat` events (in milliseconds).  
   Default: `15000`
 
+- `REPLAY_BUFFER_SIZE`  
+  Number of recent `metric` / `notification` events kept for `Last-Event-ID` replay.  
+  Default: `500` (about 15 minutes at the default 2s interval)
+
+- `CLIENT_RETRY_MS`  
+  Reconnect delay sent to clients as the SSE `retry:` field.  
+  Default: `3000`
+
 Example (in Codespaces terminal):
 
 ```bash
 export METRICS_INTERVAL_MS=1000
 export NOTIFICATION_PROBABILITY=0.4
 export HEARTBEAT_INTERVAL_MS=10000
+export REPLAY_BUFFER_SIZE=200
 export PORT=3000
 npm start
 ```
@@ -175,8 +236,14 @@ The `public/dashboard.html` page is a self-contained dashboard that:
   - **CPU** & **memory** utilization with horizontal bars
   - **Request** & **error** rate numbers
   - Live **notifications** with severity chips (`info`, `warning`, `critical`)
-  - A scrollable **metrics log**
+  - A scrollable **event log** showing each event's SSE **ID** (replayed events in blue, gaps in red)
+  - The **last event ID** received
   - Connection **status** + last **heartbeat** time
+- Has buttons for experimenting with resume:
+  - **Drop** — close the connection client-side (the server keeps generating events)
+  - **Resume** — reconnect with `?lastEventId=<last id>` and replay what was missed
+  - **Fresh** — reconnect with no ID (live events only)
+  - **Server kick** — calls `POST /sse/kick`; the browser reconnects by itself and sends the `Last-Event-ID` header natively
 
 To use:
 
