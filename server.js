@@ -200,30 +200,105 @@ app.get('/sse/status', (req, res) => {
   });
 });
 
-// Most recent event from the replay buffer, as plain JSON (no streaming).
-//   GET /sse/last                                  -> latest metric or notification
-//   GET /sse/last?event=notification               -> latest notification
-//   GET /sse/last?event=notification&type=incident -> latest incident notification
-// `type` is a comma-separated list matched against data.type.
-// Returns 404 if nothing in the buffer matches.
-app.get('/sse/last', (req, res) => {
-  const eventFilter = req.query.event ? String(req.query.event) : null;
-  const typeFilter = req.query.type
+// ---------------------------------------------------------------------------
+// Plain-JSON (non-streaming) access to the replay buffer
+//
+// Shared query parameters:
+//   event  - event kind, e.g. "notification" or "metric"
+//   type   - comma-separated list matched against data.type, e.g. "incident,slowdown"
+//   since  - ISO 8601 timestamp; only events with data.timestamp strictly AFTER it
+//            match, e.g. "2026-10-22T20:00:00Z"
+// ---------------------------------------------------------------------------
+
+// Parse the shared filter params. Returns { filter } or { error } (for a 400).
+function parseBufferFilter(req) {
+  const event = req.query.event ? String(req.query.event) : null;
+  const type = req.query.type
     ? String(req.query.type).split(',').map((s) => s.trim()).filter(Boolean)
     : null;
 
+  let since = null;
+  let sinceMs = null;
+  if (req.query.since !== undefined && String(req.query.since).trim() !== '') {
+    since = String(req.query.since).trim();
+    sinceMs = Date.parse(since);
+    if (Number.isNaN(sinceMs)) {
+      return {
+        error: {
+          error: 'invalid-since',
+          message: `"since" is not a valid timestamp: ${since}. Use ISO 8601, e.g. 2026-10-22T20:00:00Z`
+        }
+      };
+    }
+  }
+
+  return { filter: { event, type, since, sinceMs } };
+}
+
+function matchesBufferFilter(e, f) {
+  if (f.event && e.event !== f.event) return false;
+  if (f.type && !f.type.includes(e.data && e.data.type)) return false;
+  if (f.sinceMs !== null) {
+    const ts = Date.parse(e.data && e.data.timestamp);
+    if (Number.isNaN(ts) || ts <= f.sinceMs) return false;
+  }
+  return true;
+}
+
+const publicFilter = (f) => ({ event: f.event, type: f.type, since: f.since });
+
+// Most recent matching event.
+//   GET /sse/last
+//   GET /sse/last?event=notification&type=incident
+//   GET /sse/last?event=notification&since=2026-10-22T20:00:00Z
+// Returns 404 if nothing in the buffer matches.
+app.get('/sse/last', (req, res) => {
+  const { filter, error } = parseBufferFilter(req);
+  if (error) return res.status(400).json(error);
+
   for (let i = eventBuffer.length - 1; i >= 0; i--) {
     const e = eventBuffer[i];
-    if (eventFilter && e.event !== eventFilter) continue;
-    if (typeFilter && !typeFilter.includes(e.data && e.data.type)) continue;
-    return res.json({ id: e.id, event: e.event, data: e.data });
+    if (matchesBufferFilter(e, filter)) {
+      return res.json({ id: e.id, event: e.event, data: e.data });
+    }
   }
 
   res.status(404).json({
     error: 'not-found',
     message: 'No buffered event matches the filter',
-    filter: { event: eventFilter, type: typeFilter },
+    filter: publicFilter(filter),
     currentEventId: lastIssuedId
+  });
+});
+
+// All matching events, oldest first (handy for polling with `since`).
+//   GET /sse/events?since=2026-10-22T20:00:00Z
+//   GET /sse/events?event=notification&type=incident,slowdown&since=...
+//   GET /sse/events?...&limit=20   -> only the newest 20 matches
+// Always 200; `events` is empty when nothing matches.
+app.get('/sse/events', (req, res) => {
+  const { filter, error } = parseBufferFilter(req);
+  if (error) return res.status(400).json(error);
+
+  let limit = null;
+  if (req.query.limit !== undefined) {
+    limit = parseInt(String(req.query.limit), 10);
+    if (!Number.isFinite(limit) || limit < 1) {
+      return res.status(400).json({ error: 'invalid-limit', message: '"limit" must be a positive integer' });
+    }
+  }
+
+  let events = eventBuffer
+    .filter((e) => matchesBufferFilter(e, filter))
+    .map((e) => ({ id: e.id, event: e.event, data: e.data }));
+  if (limit !== null && events.length > limit) events = events.slice(-limit);
+
+  res.json({
+    filter: publicFilter(filter),
+    count: events.length,
+    currentEventId: lastIssuedId,
+    oldestBufferedTimestamp: eventBuffer.length ? eventBuffer[0].data.timestamp : null,
+    events
   });
 });
 

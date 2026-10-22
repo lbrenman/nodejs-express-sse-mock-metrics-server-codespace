@@ -61,9 +61,21 @@ It:
 - **Stream status**: `GET /sse/status`
   - Current event ID, replay buffer range, and connected client count.
 - **Last event**: `GET /sse/last`
-  - Returns the most recent buffered event as plain JSON: `{ "id": 1873, "event": "metric", "data": { ... } }`.
-  - Optional filters: `?event=notification` (event kind) and `?type=incident,slowdown` (matched against `data.type`).
+  - Returns the most recent matching buffered event as plain JSON: `{ "id": 1873, "event": "metric", "data": { ... } }`.
   - Returns `404` with `{ "error": "not-found", ... }` if nothing in the buffer matches.
+- **Events since**: `GET /sse/events`
+  - Returns all matching buffered events, oldest first: `{ "filter": {...}, "count": 3, "currentEventId": 1873, "oldestBufferedTimestamp": "...", "events": [ ... ] }`.
+  - Always `200`; `events` is empty when nothing matches. Optional `?limit=N` keeps only the newest N matches.
+
+Both buffer endpoints accept the same optional filters:
+
+| Param   | Example                       | Meaning |
+|---------|-------------------------------|---------|
+| `event` | `notification`                | Event kind (`notification` or `metric`) |
+| `type`  | `incident,slowdown`           | Comma-separated list matched against `data.type` |
+| `since` | `2026-10-22T20:00:00Z`        | Only events whose `data.timestamp` is strictly **after** this ISO 8601 time. An invalid value returns `400`. |
+
+The buffer only holds the last `REPLAY_BUFFER_SIZE` events. If `since` is older than `oldestBufferedTimestamp`, earlier events are no longer available.
 - **Kick clients**: `POST /sse/kick`
   - Server closes every SSE connection. Browser `EventSource` clients reconnect on their own and send `Last-Event-ID` automatically.
 - **Dashboard**: `GET /dashboard.html`
@@ -179,6 +191,9 @@ curl https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/status
 # 4. Fetch the most recent event (or the most recent incident notification)
 curl https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/last
 curl "https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/last?event=notification&type=incident"
+
+# 5. Everything after a timestamp (e.g. for polling)
+curl "https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/events?event=notification&since=2026-10-22T20:00:00Z"
 ```
 
 ### Try it with Postman
