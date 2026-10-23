@@ -237,6 +237,12 @@
     }
     .btn:hover { background: #1f2937; }
     .btn:disabled { opacity: 0.4; cursor: default; }
+    .btn.paused {
+      background: rgba(234, 179, 8, 0.15);
+      border-color: #a16207;
+      color: #facc15;
+    }
+    .log-line.generator { color: #facc15; }
     .log-line.replayed { color: #93c5fd; }
     .log-line.gap { color: #fca5a5; }
     .pill {
@@ -263,6 +269,7 @@
       <button class="btn" id="btn-resume" title="Reconnect and replay everything after the last event id">Resume</button>
       <button class="btn" id="btn-fresh" title="Reconnect without a last event id (live only)">Fresh</button>
       <button class="btn" id="btn-kick" title="Server closes the connection; EventSource auto-reconnects and sends Last-Event-ID itself">Server kick</button>
+      <button class="btn" id="btn-pause" title="Pause or resume metric/notification generation on the server (affects all clients)">⏸ Pause events</button>
       <div id="status-pill" class="status disconnected">
         <span class="status-dot"></span>
         <span id="status-text">Disconnected</span>
@@ -441,11 +448,26 @@
       appendLog(`${label} metric`, evt.data, cls);
     }
 
+    // Generator pause state, kept in sync from system-info, generator-status and
+    // heartbeat events so every open dashboard reflects pauses made anywhere.
+    const pauseBtn = document.getElementById('btn-pause');
+    let generatorPaused = false;
+
+    function setGeneratorPaused(isPaused) {
+      if (typeof isPaused !== 'boolean') return;
+      generatorPaused = isPaused;
+      pauseBtn.textContent = isPaused ? '▶ Resume events' : '⏸ Pause events';
+      pauseBtn.classList.toggle('paused', isPaused);
+      metricTimestamp.classList.toggle('muted', isPaused);
+      if (isPaused) metricTimestamp.textContent = 'Event generation paused on the server';
+    }
+
     function updateHeartbeat(evt) {
       try {
         const data = JSON.parse(evt.data);
+        setGeneratorPaused(data.paused);
         const ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
-        heartbeatLabel.textContent = 'Heartbeat: ' + ts;
+        heartbeatLabel.textContent = 'Heartbeat: ' + ts + (data.paused ? ' (generator paused)' : '');
       } catch (e) {
         heartbeatLabel.textContent = 'Heartbeat: received';
       }
@@ -477,6 +499,7 @@
         try {
           const info = JSON.parse(evt.data);
           pendingReplays = info.resume?.replayedCount || 0;
+          setGeneratorPaused(info.paused);
           if (info.resume?.requestedLastEventId != null) {
             appendLog('system-info', `resume requested after #${info.resume.requestedLastEventId}, replaying ${pendingReplays} event(s)`, 'replayed');
           }
@@ -486,6 +509,16 @@
 
       es.addEventListener('replay-gap', (evt) => {
         appendLog('replay-gap', evt.data, 'gap');
+      });
+
+      es.addEventListener('generator-status', (evt) => {
+        try {
+          const s = JSON.parse(evt.data);
+          setGeneratorPaused(s.paused);
+          appendLog('generator', s.paused
+            ? `paused after #${s.currentEventId}`
+            : `resumed (next event will be #${s.currentEventId + 1})`, 'generator');
+        } catch (e) { /* ignore */ }
       });
 
       es.addEventListener('metric', updateMetrics);
@@ -521,6 +554,21 @@
         appendLog('system', `server kicked ${j.kicked} connection(s); EventSource will reconnect on its own`);
       } catch (e) {
         appendLog('system', 'kick failed: ' + e.message, 'gap');
+      }
+    });
+
+    // The server broadcasts generator-status to all clients, which updates the
+    // button; the response is applied too in case this page isn't connected.
+    pauseBtn.addEventListener('click', async () => {
+      pauseBtn.disabled = true;
+      try {
+        const r = await fetch(generatorPaused ? '/sse/resume' : '/sse/pause', { method: 'POST' });
+        const s = await r.json();
+        setGeneratorPaused(s.paused);
+      } catch (e) {
+        appendLog('system', 'pause/resume failed: ' + e.message, 'gap');
+      } finally {
+        pauseBtn.disabled = false;
       }
     });
   </script>

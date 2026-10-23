@@ -76,6 +76,12 @@ Both buffer endpoints accept the same optional filters:
 | `since` | `2026-10-22T20:00:00Z`        | Only events whose `data.timestamp` is strictly **after** this ISO 8601 time. An invalid value returns `400`. |
 
 The buffer only holds the last `REPLAY_BUFFER_SIZE` events. If `since` is older than `oldestBufferedTimestamp`, earlier events are no longer available.
+
+- **Pause generation**: `POST /sse/pause`
+- **Resume generation**: `POST /sse/resume`
+  - Stop or restart `metric` / `notification` generation without restarting the server. Both are idempotent and return `{ "paused": true|false, "pausedAt": "...|null", "currentEventId": 1873 }`.
+  - While paused, SSE connections stay open and heartbeats keep flowing. The ID counter and replay buffer are untouched, so IDs continue from where they stopped on resume.
+  - Every connected client gets a `generator-status` event when the state changes. `GET /sse/status` also reports `paused` and `pausedAt`.
 - **Kick clients**: `POST /sse/kick`
   - Server closes every SSE connection. Browser `EventSource` clients reconnect on their own and send `Last-Event-ID` automatically.
 - **Dashboard**: `GET /dashboard.html`
@@ -148,6 +154,21 @@ The SSE endpoint uses **named events** and **IDs**:
 - `replay-gap`
   - Sent on connect when a resume can't be fully satisfied: the requested ID is older than the replay buffer (`buffer-exceeded`, with `lostCount`) or newer than anything the server has issued, usually because the server restarted (`unknown-id`).
 
+- `generator-status`
+  - Broadcast to every connected client when generation is paused or resumed.
+  - Example:
+
+    ```json
+    {
+      "timestamp": "2026-10-22T21:40:00.000Z",
+      "paused": true,
+      "pausedAt": "2026-10-22T21:40:00.000Z",
+      "currentEventId": 1873
+    }
+    ```
+
+  - `system-info` and `heartbeat` also carry a `paused` field, so a client knows the state as soon as it connects.
+
 Each data event (`metric`, `notification`) is delivered in standard SSE format:
 
 ```text
@@ -157,7 +178,7 @@ data: {"timestamp":"...","service":"api-gateway", ...}
 
 ```
 
-Control events (`system-info`, `heartbeat`, `replay-gap`) are sent **without** an `id:` line, so they never move the client's last-event-ID cursor and are never replayed.
+Control events (`system-info`, `heartbeat`, `replay-gap`, `generator-status`) are sent **without** an `id:` line, so they never move the client's last-event-ID cursor and are never replayed.
 
 ---
 
@@ -194,6 +215,10 @@ curl "https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/last?event=notificatio
 
 # 5. Everything after a timestamp (e.g. for polling)
 curl "https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/events?event=notification&since=2026-10-22T20:00:00Z"
+
+# 6. Pause and resume event generation
+curl -X POST https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/pause
+curl -X POST https://YOUR-CODESPACE-NAME-3000.app.github.dev/sse/resume
 ```
 
 ### Try it with Postman
@@ -267,6 +292,7 @@ The `public/dashboard.html` page is a self-contained dashboard that:
   - **Resume** — reconnect with `?lastEventId=<last id>` and replay what was missed
   - **Fresh** — reconnect with no ID (live events only)
   - **Server kick** — calls `POST /sse/kick`; the browser reconnects by itself and sends the `Last-Event-ID` header natively
+  - **⏸ Pause events / ▶ Resume events** — calls `POST /sse/pause` or `POST /sse/resume`. This pauses generation on the server for **all** clients, and every open dashboard updates its button. Don't confuse it with **Resume**, which reconnects this page's connection.
 
 To use:
 

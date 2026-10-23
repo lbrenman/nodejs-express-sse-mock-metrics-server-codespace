@@ -146,18 +146,36 @@ function sendControl(res, event, data) {
   res.write(formatEvent({ event, data }));
 }
 
+// Generator pause state. While paused, no metric/notification events are produced,
+// but connections, heartbeats, the ID counter and the replay buffer are untouched,
+// so IDs simply continue from where they stopped on resume.
+let paused = false;
+let pausedAt = null;
+
+function generatorState() {
+  return { paused, pausedAt, currentEventId: lastIssuedId };
+}
+
+// Tell every connected client the generator state changed (control event, no id)
+function broadcastGeneratorStatus() {
+  const payload = { timestamp: new Date().toISOString(), ...generatorState() };
+  for (const client of clients) sendControl(client.res, 'generator-status', payload);
+}
+
 // Global generator: runs whether or not anyone is connected, so a disconnected
 // client genuinely misses events and can recover them via Last-Event-ID.
 setInterval(() => {
+  if (paused) return;
   publish('metric', generateMetrics());
   if (Math.random() < NOTIFICATION_PROBABILITY) {
     publish('notification', generateNotification());
   }
 }, METRICS_INTERVAL_MS);
 
-// Heartbeats are per-connection control messages (no id)
+// Heartbeats are per-connection control messages (no id). They keep flowing while
+// paused so idle connections stay alive.
 setInterval(() => {
-  const payload = { timestamp: new Date().toISOString(), currentEventId: lastIssuedId };
+  const payload = { timestamp: new Date().toISOString(), currentEventId: lastIssuedId, paused };
   for (const client of clients) sendControl(client.res, 'heartbeat', payload);
 }, HEARTBEAT_INTERVAL_MS);
 
@@ -172,6 +190,7 @@ app.get('/', (req, res) => {
     `<h1>SSE Metrics Server</h1>
     <p>Try connecting to <code>/sse/stream</code> with Postman or curl, or open <a href="/dashboard.html">/dashboard.html</a> in your browser.</p>
     <p>Resume after a disconnect by sending a <code>Last-Event-ID</code> header (or <code>?lastEventId=N</code>). Buffer state: <a href="/sse/status">/sse/status</a></p>
+    <p>Pause / resume event generation with <code>POST /sse/pause</code> and <code>POST /sse/resume</code>. Currently: <strong>${paused ? 'paused' : 'running'}</strong></p>
     <pre>
 Env vars:
   PORT=${PORT}
@@ -196,8 +215,31 @@ app.get('/sse/status', (req, res) => {
     bufferCapacity: REPLAY_BUFFER_SIZE,
     oldestBufferedId: eventBuffer.length ? eventBuffer[0].id : null,
     newestBufferedId: eventBuffer.length ? eventBuffer[eventBuffer.length - 1].id : null,
-    connectedClients: clients.size
+    connectedClients: clients.size,
+    paused,
+    pausedAt
   });
+});
+
+// Pause / resume event generation (idempotent). Both return the generator state.
+app.post('/sse/pause', (req, res) => {
+  if (!paused) {
+    paused = true;
+    pausedAt = new Date().toISOString();
+    console.log(`[pause] generator paused at event #${lastIssuedId}`);
+    broadcastGeneratorStatus();
+  }
+  res.json(generatorState());
+});
+
+app.post('/sse/resume', (req, res) => {
+  if (paused) {
+    paused = false;
+    pausedAt = null;
+    console.log(`[resume] generator resumed after event #${lastIssuedId}`);
+    broadcastGeneratorStatus();
+  }
+  res.json(generatorState());
 });
 
 // ---------------------------------------------------------------------------
@@ -377,6 +419,8 @@ app.get('/sse/stream', (req, res) => {
     message: 'Connected to live metrics stream',
     clientId,
     currentEventId: lastIssuedId,
+    paused,
+    pausedAt,
     resume: {
       requestedLastEventId: lastEventId,
       replayedCount: replay.length
